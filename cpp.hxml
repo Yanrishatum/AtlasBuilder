@@ -1,0 +1,7 @@
+-D dce=full
+-lib bin-packing
+-lib format
+-lib hxargs
+-cp src
+-cpp bin/cpp
+-main Main
