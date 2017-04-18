@@ -23,50 +23,116 @@ using format.bmp.Tools;
 
 // Public
 
-typedef GlobalAtlasInfo =
+@:structInit
+class GlobalAtlasInfo
 {
   // Source atlases. Contains a name of PNG atlas image considering it lies near the json file.
-  var sources:Array<String>;
+  public var sources:Array<String>;
   // Image information.
-  var images:Array<ImageAssetInfo>;
+  public var images:Array<ImageAssetInfo>;
 }
 
-typedef ImageAssetInfo =
+@:structInit
+class ImageAssetInfo
 {
   // Image ID. A path built on top of -local argument.
-  var id:String;
+  public var id:String;
   // Frames of image. There's no concept of static image, all static images will have 1 frame with delay set to 1.
-  var frames:Array<ImageAssetFrame>;
+  public var frames:Array<ImageAssetFrame>;
 }
 
-typedef ImageAssetFrame =
+@:structInit
+class ImageAssetFrame
 {
   // Atlas ID. See `GlobalAtlasInfo.sources` array.
-  var atlas:Int;
+  public var atlas:Int;
   // Position and size of frame on specified atlas.
-  var x:Int;
-  var y:Int;
-  var w:Int;
-  var h:Int;
+  public var x:Int;
+  public var y:Int;
+  public var w:Int;
+  public var h:Int;
   // Delay of the frame specified in milliseconds.
-  var delay:Int;
+  public var delay:Int;
 }
 
 // Internal
 
-typedef ImageData =
+class RawImage
 {
-  var id:String;
-  var width:Int;
-  var height:Int;
-  var frames:Array<Bytes>;
-  var delays:Array<Int>;
 }
 
-typedef RemapEntry = 
+class ImageData
 {
-  var id:String;
-  var frame:Int;
+  public var id:String;
+  public var width:Int;
+  public var height:Int;
+  public var frames:Array<FrameData>;
+  
+  public function new(id:String, width:Int, height:Int)
+  {
+    this.id = id;
+    this.width = width;
+    this.height = height;
+    this.frames = new Array();
+  }
+  
+}
+
+class FrameData
+{
+  public var image:ImageData;
+  
+  public var pixels:Bytes;
+  public var delay:Int;
+  public var width:Int;
+  public var height:Int;
+  
+  public var remap:RemapEntry;
+  
+  public var output:ImageAssetFrame;
+  
+  public function new(image:ImageData, pixels:Bytes, delay:Int)
+  {
+    this.image = image;
+    this.pixels = pixels;
+    this.delay = delay;
+    this.width = image.width;
+    this.height = image.height;
+  }
+}
+
+class RemapEntry
+{
+  public var owner:FrameData;
+  public var x:Int;
+  public var y:Int;
+  
+  public function new(owner:FrameData, x:Int = 0, y:Int = 0)
+  {
+    this.owner = owner;
+    this.x = x;
+    this.y = y;
+  }
+}
+
+enum SpacingMode
+{
+  MTransparent;
+  MEdgeColor;
+  MColor(c:Int);
+}
+
+enum OverridePriority
+{
+  POverride;
+  PIgnore;
+}
+
+enum OptimizationMode
+{
+  ONone;
+  OSame;
+  OImageInImage;
 }
 
 /**
@@ -75,25 +141,90 @@ typedef RemapEntry =
  */
 class AtlasProcessor
 {
-  // Remapping table. Same images will waste place only once.
-  private static var remapFrom:Array<RemapEntry>;
-  private static var remapTo:Array<RemapEntry>;
-  private static var rects:Map<String, ImageAssetFrame>; // Remap ID's
-  
-  // Image list
-  private static var images:Map<String, ImageData>;
-  // Ordered list sorted by sorting method.
-  private static var orderedImages:Array<ImageData>;
-  // Stats frame count
-  private static var frameCount:Int = 0;
-  
-  // Output data
-  private static var packers:Array<SkylinePacker>;
-  private static var pixels:Array<Bytes>;
-  private static var data:GlobalAtlasInfo;
-  
   public static function createAtlas():Void
   {
+    /*
+    var proc:AtlasProcessor = new AtlasProcessor();
+    
+    proc.atlasSize = Main.atlasSize;
+    verboseMode = Main.verbose;
+    infoMode = true;
+    proc.output = Main.outputPath;
+    proc.optimization = switch (Main.optimization)
+    {
+      case 1: OSame;
+      case 2: OImageInImage;
+      default: ONone;
+    }
+    
+    info("- Creating image table");
+    proc.addPath(Main.inputPath, Main.localPath);
+    
+    info("Found " + proc.orderedImages.length + " images with " + proc.frameCount + " frames in total.");
+    
+    proc.sortImages();
+    
+    proc.scanSame();
+    
+    proc.pack();
+    
+    proc.save();
+    
+    info("Done");
+    */
+  }
+  
+  public static var verboseMode:Bool;
+  public static var infoMode:Bool;
+  
+  public static inline function verbose(v:String):Void
+  {
+    if (verboseMode) Sys.println(v);
+  }
+  
+  public static inline function info(v:String):Void
+  {
+    if (infoMode) Sys.println(v);
+  }
+  
+  // Allocated atlas size
+  public var atlasSize(get, set):Int;
+  private inline function get_atlasSize():Int { return atlasWidth; }
+  private inline function set_atlasSize(v:Int):Int { return atlasWidth = atlasHeight = v; }
+  public var atlasWidth:Int;
+  public var atlasHeight:Int;
+  
+  // Remapping table. Same images will waste place only once.
+  private var remaps:Array<FrameData>;
+  
+  // Image list
+  private var images:Map<String, ImageData>;
+  // Ordered list sorted by sorting method.
+  private var orderedImages:Array<ImageData>;
+  // Stats frame count
+  private var frameCount:Int = 0;
+  
+  // Output data
+  private var packers:Array<SkylinePacker>;
+  private var pixels:Array<Bytes>;
+  private var data:GlobalAtlasInfo;
+  
+  // Spacing between images in pixels.
+  public var spacing:Int;
+  public var spacingMode:SpacingMode;
+  
+  public var overridePriority:OverridePriority;
+  public var optimization:OptimizationMode;
+  public var output:String;
+  
+  public function new()
+  {
+    atlasWidth = 2048;
+    atlasHeight = 2048;
+    
+    remaps = new Array();
+    images = new Map();
+    orderedImages = new Array();
     packers = new Array();
     pixels = new Array();
     data =
@@ -101,22 +232,17 @@ class AtlasProcessor
       sources: new Array(),
       images: new Array()
     };
-    images = new Map();
-    orderedImages = new Array();
-    Sys.println("- Creating image table");
-    scanPath(Main.inputPath, Main.localPath);
-    Sys.println("Found " + orderedImages.length + " images with " + frameCount + " frames in total.");
-    sortImages();
-    scanSame();
-    pack();
-    save();
-    Sys.println("Done");
+    optimization = OptimizationMode.OSame;
+    spacing = 0;
+    spacingMode = SpacingMode.MEdgeColor;
+    overridePriority = OverridePriority.POverride;
   }
   
   // 0: Scan
-  private static function scanPath(path:String, localPath:String):Void
+  public function addPath(path:String, localPath:String, recursive:Bool):Void
   {
-    if (Main.verbose) Sys.println("Scanning folder: " + localPath);
+    if (!FileSystem.exists(path)) throw "Specified path does not exists! " + path;
+    verbose("Scanning folder: " + localPath);
     var files:Array<String> = FileSystem.readDirectory(path);
     var newPath:String;
     var newLocal:String;
@@ -126,18 +252,27 @@ class AtlasProcessor
       newLocal = Path.join([localPath, file]);
       if (FileSystem.isDirectory(newPath))
       {
-        scanPath(newPath, newLocal);
+        if (recursive) addPath(newPath, newLocal, true);
       }
       else
       {
-        switch (Path.extension(file).toLowerCase())
+        if (images.exists(newLocal))
+        {
+          if (overridePriority == OverridePriority.PIgnore)
+          {
+            info("Warning: Ignored override image with path '" + newPath + "' at '" + newLocal + "'");
+            continue; // Skip if we set to skip overrides.
+          }
+          orderedImages.remove(images.get(newLocal));
+        }
+        switch(Path.extension(file).toLowerCase())
         {
           case "gif":
             insertGIF(newPath, newLocal);
           case "png":
             insertPNG(newPath, newLocal);
           case "jpg", "jpeg":
-            if (Main.verbose) Sys.println("Warning: Found JPG file; JPG isn't supported (@see format lib)");
+            verbose("Warning: Found JPG file; JPG isn't supported (@see format lib)");
           case "bmp":
             insertBMP(newPath, newLocal);
         }
@@ -145,7 +280,30 @@ class AtlasProcessor
     }
   }
   
-  private static function insertPNG(path:String, id:String):Void
+  public function addFile(path:String, localPath:String):Void
+  {
+    if (!FileSystem.isDirectory(path))
+    {
+      if (images.exists(localPath))
+      {
+        if (overridePriority == OverridePriority.PIgnore) return; // Skip if we set to skip overrides.
+        orderedImages.remove(images.get(localPath));
+      }
+      switch(Path.extension(path).toLowerCase())
+      {
+        case "gif":
+          insertGIF(path, localPath);
+        case "png":
+          insertPNG(path, localPath);
+        case "jpg", "jpeg":
+          verbose("Warning: Found JPG file; JPG isn't supported (@see format lib)");
+        case "bmp":
+          insertBMP(path, localPath);
+      }
+    }
+  }
+  
+  private function insertPNG(path:String, id:String):Void
   {
     var file:FileInput = File.read(path);
     var png:PngData = new PngReader(file).read();
@@ -154,7 +312,7 @@ class AtlasProcessor
     insertImage(path, id, header.width, header.height, png.extract32(), "PNG");
   }
   
-  private static function insertBMP(path:String, id:String):Void
+  private function insertBMP(path:String, id:String):Void
   {
     var file:FileInput = File.read(path);
     var bmp:BmpData = new format.bmp.Reader(file).read();
@@ -162,7 +320,7 @@ class AtlasProcessor
     insertImage(path, id, bmp.header.width, bmp.header.height, bmp.extractBGRA(), "BMP");
   }
   
-  private static function insertImage(path:String, id:String, width:Int, height:Int, bgra:Bytes, description:String):Void
+  private function insertImage(path:String, id:String, width:Int, height:Int, bgra:Bytes, description:String):Void
   {
     var data:ImageData;
     if (FileSystem.exists(Path.withoutExtension(path) + ".slice"))
@@ -171,27 +329,26 @@ class AtlasProcessor
       var frames:Int = Std.parseInt(sliceData.shift());
       var frameWidth:Int = Std.int(width / frames);
       
-      if (Main.verbose) Sys.println(description + " slice[" + frames + "]: " + id);
+      verbose(description + " slice[" + frames + "]: " + id);
       
       data = allocImageData(id, frameWidth, height);
       for (i in 0...frames)
       {
-        data.frames.push(extractPart(bgra, width, i * frameWidth, 0, frameWidth, height));
-        data.delays.push(Std.int(Std.parseFloat(sliceData.shift()) * 1000));
+        data.frames.push(extractPart(data, bgra, width, i * frameWidth, 0, frameWidth, height, Std.int(Std.parseFloat(sliceData.shift()) * 1000)));
       }
       frameCount += frames;
     }
     else
     {
-      if (Main.verbose) Sys.println(description + " image: " + id);
+      verbose(description + " image: " + id);
       data = allocImageData(id, width, height);
-      data.frames.push(bgra);
-      data.delays.push(1);
+      data.frames.push(new FrameData(data, bgra, 1));
       frameCount++;
     }
   }
   
-  private static function extractPart(input:Bytes, inputW:Int, x:Int, y:Int, w:Int, h:Int):Bytes
+  // Extracts part of an image to separate FrameData.
+  private function extractPart(image:ImageData, input:Bytes, inputW:Int, x:Int, y:Int, w:Int, h:Int, delay:Int):FrameData
   {
     var out:Bytes = Bytes.alloc(w * h * 4);
     var offset:Int = 0;
@@ -205,101 +362,212 @@ class AtlasProcessor
       inOffset += inputW;
       h--;
     }
-    return out;
+    return new FrameData(image, out, delay);
   }
   
-  private static function insertGIF(path:String, id:String):Void
+  private function insertGIF(path:String, id:String):Void
   {
     var file:FileInput = File.read(path);
     var gifData:GifData = new GifReader(file).read();
     var data:ImageData = allocImageData(id, gifData.logicalScreenDescriptor.width, gifData.logicalScreenDescriptor.height);
     var count:Int = gifData.framesCount();
     frameCount += count;
-    if (Main.verbose) Sys.println("GIF image[" + count + "]: " + id);
+    verbose("GIF image[" + count + "]: " + id);
     
     for (i in 0...count)
     {
       var gce = gifData.graphicControl(i);
-      data.frames.push(gifData.extractFullBGRA(i));
-      data.delays.push(gce != null ? gce.delay*10 : 1);
+      data.frames.push(new FrameData(data, gifData.extractFullBGRA(i), gce != null ? gce.delay*10 : 1));
     }
   }
   
   // 1: Get rid of same shit?
-  private static function scanSame():Void
+  public function optimize():Void
   {
-    Sys.println("- Removing duplicates");
-    remapFrom = new Array();
-    remapTo = new Array();
-    var hash:Array<Dynamic> = new Array();
+    if (optimization == ONone) return; // No optimization
+    // 0: Sweep for full copy
+    info("- Removing duplicates");
     
-    inline function isDuplicate(a:Bytes, b:Bytes):Bool { return a.compare(b) == 0; }
-    inline function remap(fromId:String, fromFrame:Int, toId:String, toFrame:Int):Void
+    var frames:Array<FrameData> = new Array();
+    for (image in orderedImages)
     {
-      hash.push(Md5.encode(fromId + "___" + fromFrame));
-      remapFrom.push( { id:fromId, frame:fromFrame } );
-      remapTo.push( { id:toId, frame:toFrame } );
-      if (Main.verbose) Sys.println('Removed duplicate: ${fromId}[$fromFrame] -> ${toId}[$toFrame]');
+      for (frame in image.frames) frames.push(frame);
     }
-    inline function hasRemap(id:String, frame:Int):Bool { return hash.indexOf(Md5.encode(id + "___" + frame)) != -1; }
     
-    for (i in 0...orderedImages.length)
+    remaps = new Array();
+    if (infoMode)
     {
-      var source:ImageData = orderedImages[i];
-      // Find dublicate in this animation
-      for (frameA in 0...source.frames.length)
+      Sys.print("Used optimization: ");
+      if (optimization == OSame) Sys.println("Remove full copy");
+      else Sys.println("Remove full copy and use parts of larger image when possible");
+    }
+    
+    // inline function remap(fromId:String, fromFrame:Int, toId:String, toFrame:Int):Void
+    // {
+    //   hash.push(Md5.encode(fromId + "___" + fromFrame));
+    //   remapFrom.push( { id:fromId, frame:fromFrame } );
+    //   remapTo.push( { id:toId, frame:toFrame } );
+    //   if (Main.verbose) Sys.println('Removed duplicate: ${fromId}[$fromFrame] -> ${toId}[$toFrame]');
+    // }
+    
+    // Progress printing.
+    var printBase:String = "Total duplicates removed: ";
+    var backPrint:String = "";
+    var back:String = String.fromCharCode(8);
+    while (backPrint.length < printBase.length) backPrint += back;
+    
+    var deleted:Int = 0;
+    var printed:Int = 1;
+    if (infoMode) Sys.print("Total duplicates removed: 0/" + frameCount);
+    inline function eraseTotal():Void
+    {
+      if (infoMode)
       {
-        for (frameB in (frameA + 1)...source.frames.length)
+        Sys.print(backPrint);
+        while ((printed--) > 0) Sys.print(back);
+      }
+    }
+    inline function printTotal():Void
+    {
+      // Not very elegant.
+      if (infoMode)
+      {
+        deleted++;
+        var str:String = Std.string(deleted) + "/" + frameCount;
+        printed = str.length;
+        Sys.print(printBase);
+        Sys.print(str);
+      }
+    }
+    inline function printMerge(from:FrameData, to:FrameData, offX:Int = 0, offY:Int = 0):Void
+    {
+      Sys.print("Merged: " + from.image.id + "[" + (from.image.frames.indexOf(from)) + "] -> " + to.image.id + "[" + (to.image.frames.indexOf(to)) + "]");
+      if (offX != 0 || offY != 0 || from.width != to.width || from.height != to.height) Sys.println(' @ [$offX, $offY]');
+      else Sys.print('\n');
+    }
+    
+    if (optimization == OSame)
+    {
+      for (i in 0...frames.length)
+      {
+        var frameA:FrameData = frames[i];
+        for (j in (i+1)...frames.length)
         {
-          if (!hasRemap(source.id, frameB) && isDuplicate(source.frames[frameA], source.frames[frameB]))
+          var frameB:FrameData = frames[j];
+          if (frameA.pixels.compare(frameB.pixels) == 0)
           {
-            remap(source.id, frameB, source.id, frameA);
+            frameA.remap = new RemapEntry(frameB);
+            eraseTotal();
+            if (verboseMode) printMerge(frameA, frameB);
+            printTotal();
+            break;
           }
         }
       }
-      
-      // Remove from other images
-      for (j in (i + 1)...orderedImages.length)
+    }
+    else // optimization = 2
+    {
+      for (i in 0...frames.length)
       {
-        var dest:ImageData = orderedImages[j];
-        // May be optimized since it's already sorted...
-        if (dest.width == source.width && dest.height == source.height) // Check only same-size-data
+        var frameA:FrameData = frames[i];
+        if (frameA.remap != null) continue;
+        for (j in (i+1)...frames.length)
         {
-          for (frameA in 0...source.frames.length)
+          var frameB:FrameData = frames[j];
+          if (frameB.remap != null) continue;
+          if (frameA.pixels.compare(frameB.pixels) == 0)
           {
-            if (hasRemap(source.id, frameA)) continue;
-            for (frameB in 0...dest.frames.length)
+            frameA.remap = new RemapEntry(frameB);
+            remaps.push(frameA);
+            eraseTotal();
+            if (verboseMode) printMerge(frameA, frameB);
+            printTotal();
+            break;
+          }
+          // Frame A size > frame B size.
+          else if (frameA.width >= frameB.width && frameA.height >= frameB.height && (frameA.width != frameB.width || frameA.height != frameB.height))
+          {
+            var endY:Int = frameA.height - frameB.height + 1;
+            var endX:Int = frameA.width - frameB.width + 1;
+            var pa:Bytes = frameA.pixels;
+            var pb:Bytes = frameB.pixels;
+            // trace(endX, endY);
+            
+            inline function scanLine(x:Int, y:Int, y2:Int):Bool
             {
-              if (!hasRemap(dest.id, frameB) && isDuplicate(source.frames[frameA], dest.frames[frameB]))
+              var offset:Int = (y * frameA.width + x) * 4;
+              var offset2:Int = y2 * frameB.width * 4;
+              var end:Int = offset + frameB.width * 4;
+              while(offset < end)
               {
-                remap(dest.id, frameB, source.id, frameA);
+                if (pa.getInt32(offset) != pb.getInt32(offset2) &&
+                    !(pa.get(offset+3) == 0 && pb.get(offset2+3) == 0))
+                {
+                  break; // Mismatch
+                }
+                offset += 4;
+                offset2 += 4;
               }
+              return offset == end;
             }
+            
+            var match:Bool = false;
+            for (y in 0...endY)
+            {
+              for (x in 0...endX)
+              {
+                // Matched first and last line
+                if (scanLine(x, y, 0) && scanLine(x, y + frameB.height - 1, frameB.height - 1))
+                {
+                  match = true;
+                  for (y2 in y+1...frameB.height - 2)
+                  {
+                    if (!scanLine(x, y2, y2 - y))
+                    {
+                      match = false;
+                      break;
+                    }
+                  }
+                  if (match)
+                  {
+                    frameB.remap = new RemapEntry(frameA, x, y);
+                    remaps.push(frameB);
+                    eraseTotal();
+                    if (verboseMode) printMerge(frameB, frameA, x, y);
+                    printTotal();
+                    break;
+                  }
+                } // oh god.
+                if (match) break;
+              }
+              if (match) break;
+            }
+            // if (match) break;
           }
         }
       }
     }
-    Sys.println("Total duplicates removed: " + remapFrom.length);
+    if (infoMode) Sys.print("\n");
   }
   
   // 2: Sort that
-  private static function sortImages():Void
+  public function sortImages():Void
   {
-    Sys.println("--- Sorting images ---");
+    info("--- Sorting images ---");
     orderedImages.sort(widthSorter); // TODO: Support several sorting methods.
   }
   
-  private static function widthSorter(a:ImageData, b:ImageData):Int
+  private function widthSorter(a:ImageData, b:ImageData):Int
   {
     return a.width < b.width ? 1 : -1;
   }
   
   // 3: Pack
-  private static function pack():Void
+  public function pack():Void
   {
-    Sys.println("--- Creating atlases ---");
-    Sys.println("Total images to pack: " + (frameCount - remapFrom.length));
-    rects = new Map();
+    info("--- Creating atlases ---");
+    info("Total images to pack: " + (frameCount - remaps.length));
+    
     for (i in 0...orderedImages.length)
     {
       var image:ImageData = orderedImages[i];
@@ -307,53 +575,38 @@ class AtlasProcessor
       
       for (fr in 0...image.frames.length)
       {
-        var remapData:ImageAssetFrame = findRemap(image.id, fr);
-        var frameInfo:ImageAssetFrame;
-        if (remapData != null)
-        {
-          frameInfo =
-          {
-            atlas: remapData.atlas,
-            x: remapData.x,
-            y: remapData.y,
-            w: remapData.w,
-            h: remapData.h,
-            delay: image.delays[fr]
-          };
-        }
-        else
-        {
-          frameInfo = writeFrame(image.width, image.height, image.frames[fr]);
-          frameInfo.delay = image.delays[fr];
-          rects.set(Md5.encode(image.id + "___" + fr), frameInfo);
-        }
-        imageInfo.frames.push(frameInfo);
+        // var remapData:ImageAssetFrame = findRemap(image.id, fr);
+        imageInfo.frames.push(writeFrame(image.frames[fr]));
       }
     }
-    Sys.println("Total atlases: " + packers.length);
+    info("Total atlases: " + packers.length);
   }
   
-  private static function findRemap(id:String, frame:Int):ImageAssetFrame
+  private function writeFrame(frame:FrameData, startAt:Int = 0):ImageAssetFrame
   {
-    for (i in 0...remapFrom.length)
+    if (frame.remap != null)
     {
-      var from:RemapEntry = remapFrom[i];
-      if (from.id == id && from.frame == frame)
+      var remapInfo:ImageAssetFrame = writeFrame(frame.remap.owner);
+      var info:ImageAssetFrame = 
       {
-        from = remapTo[i];
-        var hash:String = Md5.encode(from.id + "___" + from.frame);
-        return rects[hash];
+        atlas: remapInfo.atlas,
+        x: remapInfo.x + frame.remap.x,
+        y: remapInfo.y + frame.remap.y,
+        w: frame.width,
+        h: frame.height,
+        delay: frame.delay
       }
+      
+      frame.output = info;
+      
+      return info;
     }
-    return null;
-  }
-  
-  private static function writeFrame(width:Int, height:Int, bgra:Bytes, startAt:Int = 0):ImageAssetFrame
-  {
+    if (frame.output != null) return frame.output;
+    
     var rect:Rect;
     for (i in startAt...packers.length)
     {
-      rect = packers[i].insert(width, height, LevelChoiceHeuristic.MinWasteFit);
+      rect = packers[i].insert(frame.width, frame.height, LevelChoiceHeuristic.MinWasteFit);
       if (rect != null)
       {
         var info:ImageAssetFrame =
@@ -363,22 +616,24 @@ class AtlasProcessor
           y: Std.int(rect.y),
           w: Std.int(rect.width),
           h: Std.int(rect.height),
-          delay: 1
+          delay: frame.delay
         };
         
-        writePixels(info.x, info.y, width, height, bgra, pixels[i]);
+        frame.output = info;
+        
+        writePixels(info.x, info.y, frame.width, frame.height, frame.pixels, pixels[i]);
         return info;
       }
     }
     
     allocAtlas();
-    return writeFrame(width, height, bgra, packers.length - 1);
+    return writeFrame(frame, packers.length - 1);
   }
   
-  private static function writePixels(x:Int, y:Int, width:Int, height:Int, bgra:Bytes, output:Bytes):Void
+  private function writePixels(x:Int, y:Int, width:Int, height:Int, bgra:Bytes, output:Bytes):Void
   {
-    var offset:Int = Std.int((y * Main.atlasSize + x)) * 4;
-    var step:Int = Main.atlasSize * 4;
+    var offset:Int = Std.int((y * atlasWidth + x)) * 4;
+    var step:Int = atlasWidth * 4;
     var localOffset:Int = 0;
     var localStep:Int = width * 4;
     var i:Int = 0;
@@ -392,40 +647,34 @@ class AtlasProcessor
   }
   
   // 4: Save atlases
-  private static function save():Void
+  public function save():Void
   {
-    Sys.println("--- Saving ---");
+    info("--- Saving ---");
     for (i in 0...pixels.length)
     {
-      var pngPath:String = Path.join([Main.outputPath, "atlas_" + i + ".png"]);
+      var pngPath:String = Path.join([output, "atlas_" + i + ".png"]);
       data.sources.push("atlas_" + i + ".png");
-      Sys.println("Saving: atlas_" + i + ".png");
-      var png:PngData = format.png.Tools.build32BGRA(Main.atlasSize, Main.atlasSize, pixels[i]);
+      info("Saving: atlas_" + i + ".png");
+      var png:PngData = format.png.Tools.build32BGRA(atlasWidth, atlasHeight, pixels[i]);
       var output:FileOutput = File.write(pngPath);
       new format.png.Writer(output).write(png);
       output.close();
     }
-    Sys.println("Saving JSON data...");
-    File.saveContent(Path.join([Main.outputPath, "atlas.json"]), Json.stringify(data));
+    info("Saving JSON data...");
+    File.saveContent(Path.join([output, "atlas.json"]), Json.stringify(data));
   }
   
   // Allocs
   
-  private static inline function allocImageData(id:String, w:Int, h:Int):ImageData
+  private inline function allocImageData(id:String, w:Int, h:Int):ImageData
   {
-    var idata:ImageData = {
-      id: id,
-      width: w,
-      height: h,
-      frames: new Array(),
-      delays: new Array()
-    };
+    var idata:ImageData = new ImageData(id, w, h);
     images.set(id, idata);
     orderedImages.push(idata);
     return idata;
   }
   
-  private static function allocImage(id:String):ImageAssetInfo
+  private function allocImage(id:String):ImageAssetInfo
   {
     var info:ImageAssetInfo = {
       frames: new Array(),
@@ -435,10 +684,10 @@ class AtlasProcessor
     return info;
   }
   
-  private static inline function allocAtlas():Void
+  private inline function allocAtlas():Void
   {
-    packers.push(new SkylinePacker(Main.atlasSize, Main.atlasSize, true));
-    pixels.push(Bytes.alloc(Main.atlasSize * Main.atlasSize * 4));
+    packers.push(new SkylinePacker(atlasWidth, atlasHeight, true));
+    pixels.push(Bytes.alloc(atlasWidth * atlasHeight * 4));
   }
   
 }

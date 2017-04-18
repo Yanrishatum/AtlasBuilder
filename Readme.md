@@ -58,7 +58,7 @@ format: 3.2.1 or newer
 hxargs: 3.0.2 or newer
 bin-packing: 1.0.1 or newer
 ```
-Important: You have to manually commnet/remove the code in bin-packing lib to disabled rotated rectangles.  
+Important: You have to manually commnet/remove the code in bin-packing lib to disable rotated rectangles.  
 These are:
 ```
 binpacking.GuillotinePacker:149-160

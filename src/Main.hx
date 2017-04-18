@@ -1,6 +1,8 @@
 package;
 
 import hxargs.Args;
+import sys.FileSystem;
+import AtlasProcessor.OptimizationMode;
 
 /**
  * ...
@@ -8,40 +10,55 @@ import hxargs.Args;
  */
 class Main 
 {
-  public static var inputPath:String;
-  public static var localPath:String;
+  private static var paths:Array<String>;
+  private static var locals:Array<String>;
+  
   public static var outputPath:String;
-  public static var atlasSize:Int;
-  public static var verbose:Bool;
-	
+  
 	static function main() 
 	{
+    var proc:AtlasProcessor = new AtlasProcessor();
+    paths = new Array();
+    locals = new Array();
+    proc.atlasSize = 0;
     
     var handler = Args.generate([
       @doc("Input global path for image files")
       ["-i", "-input"] => function(path:String):Void
       {
-        inputPath = path;
+        if (FileSystem.exists(path)) paths.push(path);
       },
       @doc("Local path for image ID's")
       ["-l", "-local"] => function(path:String):Void
       {
-        localPath = path;
+        if (locals.length == 0) locals.push(path);
+        else locals[paths.length - 1] = path;
       },
       @doc("Atlas size")
       ["-s", "-size"] => function(size:Int):Void
       {
-        atlasSize = size;
+        proc.atlasSize = size;
       },
       @doc("Output folder where to write the data (absolute path)")
       ["-o", "-output"] => function(path:String):Void
       {
-        outputPath = path;
+        proc.output = path;
       },
       @doc("Verbose mode")
       ["-v", "-verbose"] => function():Void
       {
-        verbose = true;
+        AtlasProcessor.verboseMode = true;
+      },
+      @doc("Optimize heuristics. 0 = no optimization; 1 = remove full copy (default); 2 = scan for copies in larger images")
+      ["-opt", "-optimize"] => function(method:Int):Void
+      {
+        switch (method)
+        {
+          case 0: proc.optimization = OptimizationMode.ONone;
+          case 1: proc.optimization = OptimizationMode.OSame;
+          case 2: proc.optimization = OptimizationMode.OImageInImage;
+          default: // Wat
+        }
       }
     ]);
     var args:Array<String> = Sys.args();
@@ -55,11 +72,29 @@ class Main
     else
     {
       handler.parse(args);
-      mandatory(inputPath, null, "You have to specify input path: -i <absolute path>");
-      mandatory(localPath, null, "You have to specify local ID's path: -l <local path>");
-      mandatory(outputPath, null, "You have to specify output path: -o <absolute path>");
-      mandatory(atlasSize, 0, "You have to specify atlas size: -i <int>");
-      AtlasProcessor.createAtlas();
+      mandatory(paths.length, 0, "You have to specify at least one input path: -i <absolute path>");
+      mandatory(locals.length, 0, "You have to specify at least one local ID's path: -l <local path>");
+      mandatory(proc.output, null, "You have to specify output path: -o <absolute path>");
+      mandatory(proc.atlasSize, 0, "You have to specify atlas size: -i <int>");
+      AtlasProcessor.infoMode = true;
+      AtlasProcessor.info("- Creating image table");
+      
+      var lastLocal:String = locals[0];
+      for (i in 0...paths.length)
+      {
+        if (locals[i] != null) lastLocal = locals[i];
+        AtlasProcessor.info("- Adding path: " + paths[i] + " @ " + lastLocal);
+        if (FileSystem.isDirectory(paths[i])) proc.addPath(paths[i], lastLocal, true);
+        else proc.addFile(paths[i], lastLocal);
+      }
+      
+      @:privateAccess AtlasProcessor.info("Found " + proc.orderedImages.length + " images with " + proc.frameCount + " frames in total.");
+      
+      proc.sortImages();
+      proc.optimize();
+      proc.pack();
+      proc.save();
+      AtlasProcessor.info("Done");
     }
     
 	}
